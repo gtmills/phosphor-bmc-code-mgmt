@@ -4,6 +4,7 @@
 #include <xyz/openbmc_project/Software/Activation/server.hpp>
 #include <xyz/openbmc_project/Software/ActivationBlocksTransition/server.hpp>
 #include "xyz/openbmc_project/Software/RedundancyPriority/server.hpp"
+#include "xyz/openbmc_project/Software/ActivationProgress/server.hpp"
 
 namespace phosphor
 {
@@ -18,6 +19,8 @@ using ActivationBlocksTransitionInherit = sdbusplus::server::object::object<
  sdbusplus::xyz::openbmc_project::Software::server::ActivationBlocksTransition>;
 using RedundancyPriorityInherit = sdbusplus::server::object::object<
     sdbusplus::xyz::openbmc_project::Software::server::RedundancyPriority>;
+using ActivationProgressInherit = sdbusplus::server::object::object<
+    sdbusplus::xyz::openbmc_project::Software::server::ActivationProgress>;
 
 namespace sdbusRule = sdbusplus::bus::match::rules;
 
@@ -46,12 +49,20 @@ class RedundancyPriority : public RedundancyPriorityInherit
                                    uint8_t value) :
                                    RedundancyPriorityInherit(bus,
                                    path.c_str(), true),
-                                   parent(parent)
+                                   parent(parent),
+                                   bus(bus),
+                                   path(path)
         {
             // Set Property
             priority(value);
-            // Emit deferred signal.
-            emit_object_added();
+            std::vector<std::string> interfaces({interface});
+            bus.emit_interfaces_added(path.c_str(), interfaces);
+        }
+
+        ~RedundancyPriority()
+        {
+            std::vector<std::string> interfaces({interface});
+            bus.emit_interfaces_removed(path.c_str(), interfaces);
         }
 
         /** @brief Overloaded Priority property set function
@@ -70,6 +81,13 @@ class RedundancyPriority : public RedundancyPriorityInherit
 
         /** @brief Parent Object. */
         Activation& parent;
+
+    private:
+        // TODO Remove once openbmc/openbmc#1975 is resolved
+        static constexpr auto interface =
+                "xyz.openbmc_project.Software.RedundancyPriority";
+        sdbusplus::bus::bus& bus;
+        std::string path;
 };
 
 /** @class ActivationBlocksTransition
@@ -87,7 +105,59 @@ class ActivationBlocksTransition : public ActivationBlocksTransitionInherit
          */
          ActivationBlocksTransition(sdbusplus::bus::bus& bus,
                                    const std::string& path) :
-                   ActivationBlocksTransitionInherit(bus, path.c_str()) {}
+                   ActivationBlocksTransitionInherit(bus, path.c_str(), true),
+                   bus(bus),
+                   path(path)
+        {
+            std::vector<std::string> interfaces({interface});
+            bus.emit_interfaces_added(path.c_str(), interfaces);
+        }
+
+        ~ActivationBlocksTransition()
+        {
+            std::vector<std::string> interfaces({interface});
+            bus.emit_interfaces_removed(path.c_str(), interfaces);
+        }
+
+    private:
+        // TODO Remove once openbmc/openbmc#1975 is resolved
+        static constexpr auto interface =
+                "xyz.openbmc_project.Software.ActivationBlocksTransition";
+        sdbusplus::bus::bus& bus;
+        std::string path;
+};
+
+class ActivationProgress : public ActivationProgressInherit
+{
+    public:
+        /** @brief Constructs ActivationProgress.
+          *
+          * @param[in] bus    - The Dbus bus object
+          * @param[in] path   - The Dbus object path
+          */
+        ActivationProgress(sdbusplus::bus::bus& bus,
+                           const std::string& path) :
+                ActivationProgressInherit(bus, path.c_str(), true),
+                bus(bus),
+                path(path)
+        {
+            progress(0);
+            std::vector<std::string> interfaces({interface});
+            bus.emit_interfaces_added(path.c_str(), interfaces);
+        }
+
+        ~ActivationProgress()
+        {
+            std::vector<std::string> interfaces({interface});
+            bus.emit_interfaces_removed(path.c_str(), interfaces);
+        }
+
+    private:
+        // TODO Remove once openbmc/openbmc#1975 is resolved
+        static constexpr auto interface =
+                "xyz.openbmc_project.Software.ActivationProgress";
+        sdbusplus::bus::bus& bus;
+        std::string path;
 };
 
 /** @class Activation
@@ -173,6 +243,16 @@ class Activation : public ActivationInherit
          */
         void subscribeToSystemdSignals();
 
+        /**
+         * @brief unsubscribe from the systemd signals
+         *
+         * systemd signals are only of interest during the activation process.
+         * Once complete, we want to unsubscribe to avoid unnecessary calls of
+         * unitStateChange().
+         *
+         */
+        void unsubscribeFromSystemdSignals();
+
         /** @brief Persistent sdbusplus DBus bus connection */
         sdbusplus::bus::bus& bus;
 
@@ -190,6 +270,9 @@ class Activation : public ActivationInherit
 
         /** @brief Persistent RedundancyPriority dbus object */
         std::unique_ptr<RedundancyPriority> redundancyPriority;
+
+        /** @brief Persistent ActivationProgress dbus object */
+        std::unique_ptr<ActivationProgress> activationProgress;
 
         /** @brief Used to subscribe to dbus systemd signals **/
         sdbusplus::bus::match_t systemdSignals;

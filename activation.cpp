@@ -1,5 +1,6 @@
 #include "activation.hpp"
 #include "item_updater.hpp"
+#include "config.h"
 
 namespace phosphor
 {
@@ -10,17 +11,23 @@ namespace updater
 
 namespace softwareServer = sdbusplus::xyz::openbmc_project::Software::server;
 
-constexpr auto SYSTEMD_SERVICE   = "org.freedesktop.systemd1";
-constexpr auto SYSTEMD_PATH      = "/org/freedesktop/systemd1";
-constexpr auto SIGNAL_INTERFACE  = "/org/freedesktop/systemd1";
-constexpr auto MANAGER_INTERFACE = "org.freedesktop.systemd1.Manager";
-
 void Activation::subscribeToSystemdSignals()
 {
-    auto method = this->bus.new_method_call(SYSTEMD_SERVICE,
+    auto method = this->bus.new_method_call(SYSTEMD_BUSNAME,
                                             SYSTEMD_PATH,
-                                            SIGNAL_INTERFACE,
+                                            SYSTEMD_INTERFACE,
                                             "Subscribe");
+    this->bus.call_noreply(method);
+
+    return;
+}
+
+void Activation::unsubscribeFromSystemdSignals()
+{
+    auto method = this->bus.new_method_call(SYSTEMD_BUSNAME,
+                                            SYSTEMD_PATH,
+                                            SYSTEMD_INTERFACE,
+                                            "Unsubscribe");
     this->bus.call_noreply(method);
 
     return;
@@ -39,6 +46,12 @@ auto Activation::activation(Activations value) ->
     {
         if (rwVolumeCreated == false && roVolumeCreated == false)
         {
+            if (!activationProgress)
+            {
+                activationProgress = std::make_unique<ActivationProgress>(bus,
+                        path);
+            }
+
             if (!activationBlocksTransition)
             {
                 activationBlocksTransition =
@@ -48,9 +61,9 @@ auto Activation::activation(Activations value) ->
             }
 
             auto method = bus.new_method_call(
-                    SYSTEMD_SERVICE,
+                    SYSTEMD_BUSNAME,
                     SYSTEMD_PATH,
-                    MANAGER_INTERFACE,
+                    SYSTEMD_INTERFACE,
                     "StartUnit");
             method.append("obmc-flash-bmc-ubirw.service", "replace");
             bus.call_noreply(method);
@@ -58,15 +71,19 @@ auto Activation::activation(Activations value) ->
             auto roServiceFile = "obmc-flash-bmc-ubiro@" + versionId +
                     ".service";
             method = bus.new_method_call(
-                    SYSTEMD_SERVICE,
+                    SYSTEMD_BUSNAME,
                     SYSTEMD_PATH,
-                    MANAGER_INTERFACE,
+                    SYSTEMD_INTERFACE,
                     "StartUnit");
             method.append(roServiceFile, "replace");
             bus.call_noreply(method);
+
+            activationProgress->progress(10);
         }
         else if (rwVolumeCreated == true && roVolumeCreated == true)
         {
+            activationProgress->progress(90);
+
             if (!redundancyPriority)
             {
                 redundancyPriority =
@@ -77,7 +94,15 @@ auto Activation::activation(Activations value) ->
                                     0);
             }
 
+            activationProgress->progress(100);
+
             activationBlocksTransition.reset(nullptr);
+            activationProgress.reset(nullptr);
+
+            rwVolumeCreated = false;
+            roVolumeCreated = false;
+            Activation::unsubscribeFromSystemdSignals();
+
             return softwareServer::Activation::activation(
                     softwareServer::Activation::Activations::Active);
         }
@@ -85,6 +110,7 @@ auto Activation::activation(Activations value) ->
     else
     {
         activationBlocksTransition.reset(nullptr);
+        activationProgress.reset(nullptr);
     }
     return softwareServer::Activation::activation(value);
 }
@@ -120,6 +146,12 @@ uint8_t RedundancyPriority::priority(uint8_t value)
 
 void Activation::unitStateChange(sdbusplus::message::message& msg)
 {
+    if (softwareServer::Activation::activation() !=
+                softwareServer::Activation::Activations::Activating)
+    {
+        return;
+    }
+
     uint32_t newStateID {};
     sdbusplus::message::object_path newStateObjPath;
     std::string newStateUnit{};
@@ -134,11 +166,13 @@ void Activation::unitStateChange(sdbusplus::message::message& msg)
     if(newStateUnit == rwServiceFile && newStateResult == "done")
     {
         rwVolumeCreated = true;
+        activationProgress->progress(activationProgress->progress() + 20);
     }
 
     if(newStateUnit == roServiceFile && newStateResult == "done")
     {
         roVolumeCreated = true;
+        activationProgress->progress(activationProgress->progress() + 50);
     }
 
     if(rwVolumeCreated && roVolumeCreated)
