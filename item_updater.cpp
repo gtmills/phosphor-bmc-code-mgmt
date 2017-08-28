@@ -6,6 +6,7 @@
 #include "xyz/openbmc_project/Software/Version/server.hpp"
 #include <experimental/filesystem>
 #include "version.hpp"
+#include "serialize.hpp"
 
 namespace phosphor
 {
@@ -16,11 +17,15 @@ namespace updater
 
 // When you see server:: you know we're referencing our base class
 namespace server = sdbusplus::xyz::openbmc_project::Software::server;
+namespace control = sdbusplus::xyz::openbmc_project::Control::server;
 
 using namespace phosphor::logging;
 namespace fs = std::experimental::filesystem;
 
-constexpr auto bmcImage = "image-rofs";
+const std::vector<std::string> bmcImages = {"image-kernel",
+                                            "image-rofs",
+                                            "image-rwfs",
+                                            "image-u-boot"};
 
 void ItemUpdater::createActivation(sdbusplus::message::message& msg)
 {
@@ -122,6 +127,11 @@ void ItemUpdater::createActivation(sdbusplus::message::message& msg)
                                           this,
                                           std::placeholders::_1))));
     }
+    else
+    {
+        log<level::INFO>("Software Object with the same version already exists",
+                        entry("VERSION_ID=%s", versionId));
+    }
     return;
 }
 
@@ -157,8 +167,7 @@ void ItemUpdater::processBMCImage()
 
 void ItemUpdater::erase(std::string entryId)
 {
-    // Delete ReadWrite and ReadOnly partitions
-    removeReadWritePartition(entryId);
+    // Delete ReadOnly partitions
     removeReadOnlyPartition(entryId);
 
     // Removing entry in versions map
@@ -186,25 +195,33 @@ void ItemUpdater::erase(std::string entryId)
     //       If not, don't continue.
 
     this->activations.erase(entryId);
+    removeFile(entryId);
 }
 
 ItemUpdater::ActivationStatus ItemUpdater::validateSquashFSImage(
              const std::string& filePath)
 {
+    bool invalid = false;
 
-    fs::path file(filePath);
-    file /= bmcImage;
-    std::ifstream efile(file.c_str());
-
-    if (efile.good() == 1)
+    for (auto& bmcImage : bmcImages)
     {
-        return ItemUpdater::ActivationStatus::ready;
+        fs::path file(filePath);
+        file /= bmcImage;
+        std::ifstream efile(file.c_str());
+        if (efile.good() != 1)
+        {
+            log<level::ERR>("Failed to find the BMC image.",
+                    entry("IMAGE=%s", bmcImage.c_str()));
+            invalid = true;
+        }
     }
-    else
+
+    if (invalid)
     {
-        log<level::ERR>("Failed to find the BMC image.");
         return ItemUpdater::ActivationStatus::invalid;
     }
+
+    return ItemUpdater::ActivationStatus::ready;
 }
 
 void ItemUpdater::freePriority(uint8_t value)
@@ -230,7 +247,7 @@ void ItemUpdater::reset()
             SYSTEMD_PATH,
             SYSTEMD_INTERFACE,
             "StartUnit");
-    method.append("obmc-flash-bmc-setenv@rwreset=true.service", "replace");
+    method.append("obmc-flash-bmc-setenv@rwreset\\x3dtrue.service", "replace");
     bus.call_noreply(method);
 
     log<level::INFO>("BMC factory reset will take effect upon reboot.");
@@ -253,18 +270,54 @@ void ItemUpdater::removeReadOnlyPartition(std::string versionId)
     bus.call_noreply(method);
 }
 
-void ItemUpdater::removeReadWritePartition(std::string versionId)
+bool ItemUpdater::fieldModeEnabled(bool value)
 {
-    auto serviceFile = "obmc-flash-bmc-ubirw-remove.service";
+    // enabling field mode is intended to be one way: false -> true
+    if (value && !control::FieldMode::fieldModeEnabled())
+    {
+        control::FieldMode::fieldModeEnabled(value);
 
-    // Remove the read-write partitions.
-    auto method = bus.new_method_call(
-            SYSTEMD_BUSNAME,
-            SYSTEMD_PATH,
-            SYSTEMD_INTERFACE,
-            "StartUnit");
-    method.append(serviceFile, "replace");
-    bus.call_noreply(method);
+        auto method = bus.new_method_call(
+                SYSTEMD_BUSNAME,
+                SYSTEMD_PATH,
+                SYSTEMD_INTERFACE,
+                "StartUnit");
+        method.append("obmc-flash-bmc-setenv@fieldmode\\x3dtrue.service",
+                "replace");
+        bus.call_noreply(method);
+
+        method = bus.new_method_call(
+                SYSTEMD_BUSNAME,
+                SYSTEMD_PATH,
+                SYSTEMD_INTERFACE,
+                "StopUnit");
+        method.append("usr-local.mount", "replace");
+        bus.call_noreply(method);
+
+        std::vector<std::string> usrLocal = {"usr-local.mount"};
+
+        method = bus.new_method_call(
+                SYSTEMD_BUSNAME,
+                SYSTEMD_PATH,
+                SYSTEMD_INTERFACE,
+                "MaskUnitFiles");
+        method.append(usrLocal, false, true);
+        bus.call_noreply(method);
+    }
+
+    return control::FieldMode::fieldModeEnabled();
+}
+
+void ItemUpdater::restoreFieldModeStatus()
+{
+    std::ifstream input("/run/fw_env");
+    std::string envVar;
+    std::getline(input, envVar);
+
+    if(envVar.find("fieldmode=true") != std::string::npos)
+    {
+        ItemUpdater::fieldModeEnabled(true);
+    }
 }
 
 } // namespace updater
