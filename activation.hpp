@@ -5,6 +5,7 @@
 #include <xyz/openbmc_project/Software/ActivationBlocksTransition/server.hpp>
 #include "xyz/openbmc_project/Software/RedundancyPriority/server.hpp"
 #include "xyz/openbmc_project/Software/ActivationProgress/server.hpp"
+#include "org/openbmc/Associations/server.hpp"
 
 namespace phosphor
 {
@@ -13,8 +14,11 @@ namespace software
 namespace updater
 {
 
+using AssociationList =
+     std::vector<std::tuple<std::string, std::string, std::string>>;
 using ActivationInherit = sdbusplus::server::object::object<
-    sdbusplus::xyz::openbmc_project::Software::server::Activation>;
+    sdbusplus::xyz::openbmc_project::Software::server::Activation,
+    sdbusplus::org::openbmc::server::Associations>;
 using ActivationBlocksTransitionInherit = sdbusplus::server::object::object<
  sdbusplus::xyz::openbmc_project::Software::server::ActivationBlocksTransition>;
 using RedundancyPriorityInherit = sdbusplus::server::object::object<
@@ -160,6 +164,8 @@ class ActivationProgress : public ActivationProgressInherit
         std::string path;
 };
 
+// TODO: openbmc/openbmc#2086 - Add removeActiveAssociation() after
+//       Delete() is implemented
 /** @class Activation
  *  @brief OpenBMC activation software management implementation.
  *  @details A concrete implementation for
@@ -175,12 +181,14 @@ class Activation : public ActivationInherit
          * @param[in] parent - Parent object.
          * @param[in] versionId  - The software version id
          * @param[in] activationStatus - The status of Activation
+         * @param[in] assocs - Association objects
          */
         Activation(sdbusplus::bus::bus& bus, const std::string& path,
                    ItemUpdater& parent,
                    std::string& versionId,
                    sdbusplus::xyz::openbmc_project::Software::
-                   server::Activation::Activations activationStatus) :
+                   server::Activation::Activations activationStatus,
+                   AssociationList& assocs) :
                    ActivationInherit(bus, path.c_str(), true),
                    bus(bus),
                    path(path),
@@ -200,6 +208,8 @@ class Activation : public ActivationInherit
             subscribeToSystemdSignals();
             // Set Properties.
             activation(activationStatus);
+            associations(assocs);
+
             // Emit deferred signal.
             emit_object_added();
         }

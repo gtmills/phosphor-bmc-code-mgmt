@@ -25,29 +25,29 @@ namespace fs = std::experimental::filesystem;
 void Download::downloadViaTFTP(std::string fileName,
                                std::string serverAddress)
 {
+    using Argument = xyz::openbmc_project::Common::InvalidArgument;
 
     // Sanitize the fileName string
-    fileName.erase(std::remove(fileName.begin(), fileName.end(), '/'),
-                   fileName.end());
-    fileName = fileName.substr(fileName.find_first_not_of('.'));
+    if (!fileName.empty())
+    {
+        fileName.erase(std::remove(fileName.begin(), fileName.end(), '/'),
+                       fileName.end());
+        fileName = fileName.substr(fileName.find_first_not_of('.'));
+    }
 
     if (fileName.empty())
     {
         log<level::ERR>("Error FileName is empty");
-        elog<InvalidArgument>(xyz::openbmc_project::Common::InvalidArgument::
-                              ARGUMENT_NAME("FileName"),
-                              xyz::openbmc_project::Common::InvalidArgument::
-                              ARGUMENT_VALUE(fileName.c_str()));
+        elog<InvalidArgument>(Argument::ARGUMENT_NAME("FileName"),
+                              Argument::ARGUMENT_VALUE(fileName.c_str()));
         return;
     }
 
     if (serverAddress.empty())
     {
         log<level::ERR>("Error ServerAddress is empty");
-        elog<InvalidArgument>(xyz::openbmc_project::Common::InvalidArgument::
-                              ARGUMENT_NAME("ServerAddress"),
-                              xyz::openbmc_project::Common::InvalidArgument::
-                              ARGUMENT_VALUE(serverAddress.c_str()));
+        elog<InvalidArgument>(Argument::ARGUMENT_NAME("ServerAddress"),
+                              Argument::ARGUMENT_VALUE(serverAddress.c_str()));
         return;
     }
 
@@ -68,8 +68,9 @@ void Download::downloadViaTFTP(std::string fileName,
     {
         // child process
         execl("/usr/bin/tftp", "tftp", "-g", "-r",  fileName.c_str(),
-              serverAddress.c_str(), "-l", (std::string{IMG_UPLOAD_DIR} + '/' +
-                                            fileName).c_str(), (char*)0);
+              serverAddress.c_str(), "-l",
+              (std::string{IMG_UPLOAD_DIR} + '/' + fileName).c_str(),
+              (char*)0);
         // execl only returns on fail
         log<level::ERR>("Error occurred during the TFTP call");
         elog<InternalFailure>();

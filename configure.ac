@@ -51,6 +51,13 @@ AS_IF([test "x$enable_oe_sdk" == "xyes"],
 AX_CXX_COMPILE_STDCXX_14([noext])
 AX_APPEND_COMPILE_FLAGS([-Wall -Werror], [CXXFLAGS])
 
+AC_DEFINE(ACTIVATION_FWD_ASSOCIATION, "inventory", [The name of the activation's forward association.])
+AC_DEFINE(ACTIVATION_REV_ASSOCIATION, "activation", [The name of the activation's reverse association.])
+AC_DEFINE(CHASSIS_INVENTORY_PATH, "/xyz/openbmc_project/inventory/system/chassis/", [The chassis inventory path root.])
+
+AC_DEFINE(ACTIVE_FWD_ASSOCIATION, "active", [The name of the active's forward association.])
+AC_DEFINE(ACTIVE_REV_ASSOCIATION, "software_version", [The name of the active's reverse association.])
+
 AC_ARG_VAR(VERSION_BUSNAME, [The Dbus busname to own])
 AS_IF([test "x$VERSION_BUSNAME" == "x"], [VERSION_BUSNAME="xyz.openbmc_project.Software.Version"])
 AC_DEFINE_UNQUOTED([VERSION_BUSNAME], ["$VERSION_BUSNAME"], [The DBus busname to own])
@@ -64,10 +71,20 @@ AS_IF([test "x$DOWNLOAD_BUSNAME" == "x"],
     [DOWNLOAD_BUSNAME="xyz.openbmc_project.Software.Download"])
 AC_DEFINE_UNQUOTED([DOWNLOAD_BUSNAME], ["$DOWNLOAD_BUSNAME"], [The DBus busname to own])
 
+AC_DEFINE([MAPPER_BUSNAME], ["xyz.openbmc_project.ObjectMapper"], [Object mapper bus name])
+AC_DEFINE([MAPPER_INTERFACE], ["xyz.openbmc_project.ObjectMapper"], [Object mapper interface])
+AC_DEFINE([MAPPER_PATH], ["/xyz/openbmc_project/object_mapper"], [Object mapper DBUS path])
+
 AC_DEFINE(VERSION_IFACE, "xyz.openbmc_project.Software.Version",
     [The software version manager interface])
 AC_DEFINE(FILEPATH_IFACE, "xyz.openbmc_project.Common.FilePath",
     [The common file path interface])
+AC_DEFINE(OS_RELEASE_FILE, "/etc/os-release",
+    [The name of the BMC table of contents file])
+AC_DEFINE(MEDIA_DIR, "/media/",
+    [The base dir where all RO partitions are mounted])
+AC_DEFINE(BMC_RO_PREFIX, "/media/ro-",
+    [The prefix path for the versioned read-only bmc partitions])
 AC_DEFINE(PERSIST_DIR, "/var/lib/obmc/phosphor-bmc-code-mgmt/",
     [The dir where activation data is stored in files])
 AC_DEFINE(SYSTEMD_BUSNAME, "org.freedesktop.systemd1",
