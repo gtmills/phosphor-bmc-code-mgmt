@@ -103,16 +103,17 @@ void ItemUpdater::createActivation(sdbusplus::message::message& msg)
         auto activationState = server::Activation::Activations::Invalid;
         ItemUpdater::ActivationStatus result =
                 ItemUpdater::validateSquashFSImage(filePath);
+        AssociationList associations = {};
+
         if (result == ItemUpdater::ActivationStatus::ready)
         {
             activationState = server::Activation::Activations::Ready;
+            // Create an association to the BMC inventory item
+            associations.emplace_back(std::make_tuple(
+                                              ACTIVATION_FWD_ASSOCIATION,
+                                              ACTIVATION_REV_ASSOCIATION,
+                                              bmcInventoryPath));
         }
-
-        // Create an association to the BMC inventory item
-        AssociationList associations{(std::make_tuple(
-                                          ACTIVATION_FWD_ASSOCIATION,
-                                          ACTIVATION_REV_ASSOCIATION,
-                                          bmcInventoryPath))};
 
         activations.insert(std::make_pair(
                                versionId,
@@ -130,10 +131,7 @@ void ItemUpdater::createActivation(sdbusplus::message::message& msg)
                                 path,
                                 version,
                                 purpose,
-                                filePath,
-                                std::bind(&ItemUpdater::erase,
-                                          this,
-                                          std::placeholders::_1))));
+                                filePath)));
     }
     else
     {
@@ -145,12 +143,6 @@ void ItemUpdater::createActivation(sdbusplus::message::message& msg)
 
 void ItemUpdater::processBMCImage()
 {
-    // Create an association to the BMC inventory item
-    AssociationList associations{(std::make_tuple(
-                                      ACTIVATION_FWD_ASSOCIATION,
-                                      ACTIVATION_REV_ASSOCIATION,
-                                      bmcInventoryPath))};
-
     // Read os-release from folders under /media/ to get
     // BMC Software Versions.
     for(const auto& iter : fs::directory_iterator(MEDIA_DIR))
@@ -183,6 +175,20 @@ void ItemUpdater::processBMCImage()
             auto id = iter.path().native().substr(BMC_RO_PREFIX_LEN);
             auto purpose = server::Version::VersionPurpose::BMC;
             auto path = fs::path(SOFTWARE_OBJPATH) / id;
+
+            AssociationList associations = {};
+
+            if (activationState == server::Activation::Activations::Active)
+            {
+                // Create an association to the BMC inventory item
+                associations.emplace_back(std::make_tuple(
+                                                  ACTIVATION_FWD_ASSOCIATION,
+                                                  ACTIVATION_REV_ASSOCIATION,
+                                                  bmcInventoryPath));
+
+                // Create an active association since this image is active
+                createActiveAssociation(path);
+            }
 
             // Create Activation instance for this version.
             activations.insert(std::make_pair(
@@ -221,10 +227,7 @@ void ItemUpdater::processBMCImage()
                                      path,
                                      version,
                                      purpose,
-                                     "",
-                                     std::bind(&ItemUpdater::erase,
-                                       this,
-                                       std::placeholders::_1))));
+                                     "")));
         }
     }
     return;
@@ -232,9 +235,33 @@ void ItemUpdater::processBMCImage()
 
 void ItemUpdater::erase(std::string entryId)
 {
-    // Delete ReadOnly partitions
-    removeReadOnlyPartition(entryId);
-    removeFile(entryId);
+    // Find entry in versions map
+    auto it = versions.find(entryId);
+    if (it != versions.end())
+    {
+        if (it->second->isFunctional())
+        {
+            log<level::ERR>(("Error: Version " + entryId + \
+                             " is currently running on the BMC." \
+                             " Unable to remove.").c_str());
+             return;
+        }
+
+        // Delete ReadOnly partitions if it's not active
+        removeReadOnlyPartition(entryId);
+        removeFile(entryId);
+    }
+    else
+    {
+        // Delete ReadOnly partitions even if we can't find the version
+        removeReadOnlyPartition(entryId);
+        removeFile(entryId);
+
+        log<level::ERR>(("Error: Failed to find version " + entryId + \
+                         " in item updater versions map." \
+                         " Unable to remove.").c_str());
+        return;
+    }
 
     // Remove the priority environment variable.
     auto serviceFile = "obmc-flash-bmc-setenv@" + entryId + ".service";
@@ -247,14 +274,6 @@ void ItemUpdater::erase(std::string entryId)
     bus.call_noreply(method);
 
     // Removing entry in versions map
-    auto it = versions.find(entryId);
-    if (it == versions.end())
-    {
-        log<level::ERR>(("Error: Failed to find version " + entryId + \
-                         " in item updater versions map." \
-                         " Unable to remove.").c_str());
-        return;
-    }
     this->versions.erase(entryId);
 
     // Removing entry in activations map
@@ -266,9 +285,6 @@ void ItemUpdater::erase(std::string entryId)
                          " Unable to remove.").c_str());
         return;
     }
-    // TODO: openbmc/openbmc#1986
-    //       Test if this is the currently running image
-    //       If not, don't continue.
 
     this->activations.erase(entryId);
 }

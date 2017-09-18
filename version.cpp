@@ -4,6 +4,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <phosphor-logging/log.hpp>
+#include "config.h"
 #include "version.hpp"
 
 namespace phosphor
@@ -101,15 +102,11 @@ std::string Version::getBMCVersion(const std::string& releaseFilePath)
     return version;
 }
 
-void Version::delete_()
+bool Version::isFunctional()
 {
-    if (eraseCallback)
-    {
-        eraseCallback(getId(version()));
-    }
+    return versionStr == getBMCVersion(OS_RELEASE_FILE);
 }
 
 } // namespace manager
 } // namespace software
 } // namepsace phosphor
-

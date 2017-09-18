@@ -2,7 +2,6 @@
 
 #include <sdbusplus/bus.hpp>
 #include "xyz/openbmc_project/Software/Version/server.hpp"
-#include "xyz/openbmc_project/Object/Delete/server.hpp"
 #include "xyz/openbmc_project/Common/FilePath/server.hpp"
 #include <functional>
 
@@ -17,7 +16,6 @@ typedef std::function<void(std::string)> eraseFunc;
 
 using VersionInherit = sdbusplus::server::object::object<
     sdbusplus::xyz::openbmc_project::Software::server::Version,
-    sdbusplus::xyz::openbmc_project::Object::server::Delete,
     sdbusplus::xyz::openbmc_project::Common::server::FilePath>;
 
 /** @class Version
@@ -35,18 +33,14 @@ class Version : public VersionInherit
          * @param[in] versionId      - The version identifier
          * @param[in] versionPurpose - The version purpose
          * @param[in] filePath       - The image filesystem path
-         * @param[in] callback       - The parent's erase callback
          */
         Version(sdbusplus::bus::bus& bus,
                 const std::string& objPath,
                 const std::string& versionId,
                 VersionPurpose versionPurpose,
-                const std::string& filePath,
-                eraseFunc callback) : VersionInherit(
-                    bus, (objPath).c_str(), true)
+                const std::string& filePath) : VersionInherit(
+                    bus, (objPath).c_str(), true), versionStr(versionId)
         {
-            // Bind erase method
-            eraseCallback = callback;
             // Set properties.
             purpose(versionPurpose);
             version(versionId);
@@ -80,20 +74,18 @@ class Version : public VersionInherit
          */
         static std::string getBMCVersion(const std::string& releaseFilePath);
 
-        /**
-         * @brief Delete the d-bus object and image.
+        /* @brief Check if this version matches the currently running version
+         *
+         * @return - Returns true if this version matches the currently running
+         *           version.
          */
-        void delete_() override;
-
+        bool isFunctional();
 
     private:
-        /**
-         * @brief The parent's erase callback.
-         */
-        eraseFunc eraseCallback;
+        /** @brief This Version's version string */
+        const std::string versionStr;
 };
 
 } // namespace manager
 } // namespace software
 } // namespace phosphor
-
