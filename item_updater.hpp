@@ -6,6 +6,7 @@
 #include <xyz/openbmc_project/Common/FactoryReset/server.hpp>
 #include <xyz/openbmc_project/Control/FieldMode/server.hpp>
 #include "org/openbmc/Associations/server.hpp"
+#include "xyz/openbmc_project/Collection/DeleteAll/server.hpp"
 
 namespace phosphor
 {
@@ -17,7 +18,8 @@ namespace updater
 using ItemUpdaterInherit = sdbusplus::server::object::object<
     sdbusplus::xyz::openbmc_project::Common::server::FactoryReset,
     sdbusplus::xyz::openbmc_project::Control::server::FieldMode,
-    sdbusplus::org::openbmc::server::Associations>;
+    sdbusplus::org::openbmc::server::Associations,
+    sdbusplus::xyz::openbmc_project::Collection::server::DeleteAll>;
 
 namespace MatchRules = sdbusplus::bus::match::rules;
 
@@ -66,10 +68,11 @@ class ItemUpdater : public ItemUpdaterInherit
      *  any existing priority with the same value by 1
      *
      *  @param[in] value - The priority that needs to be set free.
-     *
+     *  @param[in] versionId - The Id of the version for which we
+     *                         are trying to free up the priority.
      *  @return None
      */
-    void freePriority(uint8_t value);
+    void freePriority(uint8_t value, const std::string& versionId);
 
     /**
      * @brief Create and populate the active BMC Version.
@@ -84,19 +87,32 @@ class ItemUpdater : public ItemUpdaterInherit
      */
     void erase(std::string entryId);
 
+    /**
+     * @brief Deletes all versions except for the current one
+     */
+    void deleteAll();
 
     /** @brief Creates an active association to the
      *  newly active software image
      *
      * @param[in]  path - The path to create the association to.
      */
-    void createActiveAssociation(std::string path);
+    void createActiveAssociation(const std::string& path);
 
     /** @brief Removes an active association to the software image
      *
      * @param[in]  path - The path to remove the association from.
      */
-    void removeActiveAssociation(std::string path);
+    void removeActiveAssociation(const std::string& path);
+
+    /** @brief Determine if the given priority is the lowest
+     *
+     *  @param[in] value - The priority that needs to be checked.
+     *
+     *  @return boolean corresponding to whether the given
+     *      priority is lowest.
+     */
+    bool isLowestPriority(uint8_t value);
 
     private:
         /** @brief Callback function for Software.Version match.
@@ -140,6 +156,13 @@ class ItemUpdater : public ItemUpdaterInherit
 
         /** @brief Restores field mode status on reboot. */
         void restoreFieldModeStatus();
+
+        /** @brief Creates a functional association to the
+         *  "running" BMC software image
+         *
+         * @param[in]  path - The path to create the association to.
+         */
+        void createFunctionalAssociation(const std::string& path);
 
         /** @brief Persistent sdbusplus DBus bus connection. */
         sdbusplus::bus::bus& bus;
