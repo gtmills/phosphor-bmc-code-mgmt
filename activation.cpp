@@ -38,9 +38,9 @@ void Activation::unsubscribeFromSystemdSignals()
     return;
 }
 
-void Activation::delete_()
+void Delete::delete_()
 {
-    parent.erase(versionId);
+    parent.parent.erase(parent.versionId);
 }
 
 auto Activation::activation(Activations value) ->
@@ -59,7 +59,7 @@ auto Activation::activation(Activations value) ->
             if (!activationProgress)
             {
                 activationProgress = std::make_unique<ActivationProgress>(bus,
-                        path);
+                                                                          path);
             }
 
             if (!activationBlocksTransition)
@@ -156,9 +156,16 @@ uint8_t RedundancyPriority::priority(uint8_t value)
     parent.parent.freePriority(value, parent.versionId);
     storeToFile(parent.versionId, value);
 
-    if(parent.parent.isLowestPriority(value))
+    // Update U-Boot env variable to point to this version if it has the
+    // lowest priority. Otherwise, reset the UbootEnvVars to find the lowest
+    // priority version and set that in U-Boot.
+    if (parent.parent.isLowestPriority(value))
     {
         parent.updateUbootEnvVars();
+    }
+    else
+    {
+        parent.parent.resetUbootEnvVars();
     }
 
     return softwareServer::RedundancyPriority::priority(value);
@@ -166,8 +173,6 @@ uint8_t RedundancyPriority::priority(uint8_t value)
 
 // TODO: openbmc/openbmc#2369 Add recovery policy to updateubootvars
 //       unit template.
-// TODO: openbmc/openbmc#2370 Call StartUnit synchronously to handle
-//       Errors more gracefully.
 void Activation::updateUbootEnvVars()
 {
     auto method = bus.new_method_call(
@@ -184,7 +189,7 @@ void Activation::updateUbootEnvVars()
     if (result.is_method_error())
     {
         log<level::ERR>("Failed to update u-boot env variables",
-                        entry(" %s", SYSTEMD_INTERFACE));
+                        entry("VERSIONID=%s", versionId));
     }
 }
 
@@ -207,25 +212,25 @@ void Activation::unitStateChange(sdbusplus::message::message& msg)
     auto rwServiceFile = "obmc-flash-bmc-ubirw.service";
     auto roServiceFile = "obmc-flash-bmc-ubiro@" + versionId + ".service";
 
-    if(newStateUnit == rwServiceFile && newStateResult == "done")
+    if (newStateUnit == rwServiceFile && newStateResult == "done")
     {
         rwVolumeCreated = true;
         activationProgress->progress(activationProgress->progress() + 20);
     }
 
-    if(newStateUnit == roServiceFile && newStateResult == "done")
+    if (newStateUnit == roServiceFile && newStateResult == "done")
     {
         roVolumeCreated = true;
         activationProgress->progress(activationProgress->progress() + 50);
     }
 
-    if(rwVolumeCreated && roVolumeCreated)
+    if (rwVolumeCreated && roVolumeCreated)
     {
         Activation::activation(
                 softwareServer::Activation::Activations::Activating);
     }
 
-    if((newStateUnit == rwServiceFile || newStateUnit == roServiceFile) &&
+    if ((newStateUnit == rwServiceFile || newStateUnit == roServiceFile) &&
         (newStateResult == "failed" || newStateResult == "dependency"))
     {
         Activation::activation(softwareServer::Activation::Activations::Failed);

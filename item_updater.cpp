@@ -1,6 +1,9 @@
 #include <fstream>
 #include <string>
 #include <phosphor-logging/log.hpp>
+#include <phosphor-logging/elog.hpp>
+#include <elog-errors.hpp>
+#include <xyz/openbmc_project/Software/Version/error.hpp>
 #include "config.h"
 #include "item_updater.hpp"
 #include "xyz/openbmc_project/Software/Version/server.hpp"
@@ -20,6 +23,7 @@ namespace server = sdbusplus::xyz::openbmc_project::Software::server;
 namespace control = sdbusplus::xyz::openbmc_project::Control::server;
 
 using namespace phosphor::logging;
+using namespace sdbusplus::xyz::openbmc_project::Software::Version::Error;
 namespace fs = std::experimental::filesystem;
 
 const std::vector<std::string> bmcImages = { "image-kernel",
@@ -115,15 +119,19 @@ void ItemUpdater::createActivation(sdbusplus::message::message& msg)
                                               bmcInventoryPath));
         }
 
-        activations.insert(std::make_pair(
-                               versionId,
-                               std::make_unique<Activation>(
-                                        bus,
-                                        path,
-                                        *this,
-                                        versionId,
-                                        activationState,
-                                        associations)));
+        auto activationPtr = std::make_unique<Activation>(
+                bus,
+                path,
+                *this,
+                versionId,
+                activationState,
+                associations);
+
+        activationPtr->deleteObject =
+                std::make_unique<Delete>(bus, path, *activationPtr);
+
+        activations.insert(std::make_pair(versionId, std::move(activationPtr)));
+
         versions.insert(std::make_pair(
                             versionId,
                             std::make_unique<VersionClass>(
@@ -132,11 +140,6 @@ void ItemUpdater::createActivation(sdbusplus::message::message& msg)
                                 version,
                                 purpose,
                                 filePath)));
-    }
-    else
-    {
-        log<level::INFO>("Software Object with the same version already exists",
-                         entry("VERSION_ID=%s", versionId));
     }
     return;
 }
@@ -149,7 +152,7 @@ void ItemUpdater::processBMCImage()
 
     // Read os-release from folders under /media/ to get
     // BMC Software Versions.
-    for(const auto& iter : fs::directory_iterator(MEDIA_DIR))
+    for (const auto& iter : fs::directory_iterator(MEDIA_DIR))
     {
         auto activationState = server::Activation::Activations::Active;
         static const auto BMC_RO_PREFIX_LEN = strlen(BMC_ROFS_PREFIX);
@@ -164,8 +167,8 @@ void ItemUpdater::processBMCImage()
             auto osRelease = iter.path() / OS_RELEASE_FILE;
             if (!fs::is_regular_file(osRelease))
             {
-                log<level::ERR>("Failed to read osRelease\n",
-                                entry("FileName=%s", osRelease.string()));
+                log<level::ERR>("Failed to read osRelease",
+                                entry("FILENAME=%s", osRelease.string()));
                 ItemUpdater::erase(id);
                 continue;
             }
@@ -213,15 +216,22 @@ void ItemUpdater::processBMCImage()
                                 std::move(versionPtr)));
 
             // Create Activation instance for this version.
-            activations.insert(std::make_pair(
-                                   id,
-                                   std::make_unique<Activation>(
-                                       bus,
-                                       path,
-                                       *this,
-                                       id,
-                                       server::Activation::Activations::Active,
-                                       associations)));
+            auto activationPtr = std::make_unique<Activation>(
+                    bus,
+                    path,
+                    *this,
+                    id,
+                    activationState,
+                    associations);
+
+            // Add Delete() if this isn't the functional version
+            if (!isVersionFunctional)
+            {
+                activationPtr->deleteObject =
+                        std::make_unique<Delete>(bus, path, *activationPtr);
+            }
+
+            activations.insert(std::make_pair(id, std::move(activationPtr)));
 
             // If Active, create RedundancyPriority instance for this version.
             if (activationState == server::Activation::Activations::Active)
@@ -248,6 +258,29 @@ void ItemUpdater::processBMCImage()
             }
         }
     }
+
+    // If there is no ubi volume for bmc version then read the /etc/os-release
+    // and create rofs-<versionId> under /media
+    if (activations.size() == 0)
+    {
+        auto version = VersionClass::getBMCVersion(OS_RELEASE_FILE);
+        auto id = phosphor::software::manager::Version::getId(version);
+        auto versionFileDir = BMC_ROFS_PREFIX + id + "/etc/";
+        try
+        {
+            if (!fs::is_directory(versionFileDir))
+            {
+                fs::create_directories(versionFileDir);
+            }
+            auto versionFilePath = BMC_ROFS_PREFIX + id + OS_RELEASE_FILE;
+            fs::create_directory_symlink(OS_RELEASE_FILE, versionFilePath);
+            ItemUpdater::processBMCImage();
+        }
+        catch (const std::exception& e)
+        {
+            log<level::ERR>(e.what());
+        }
+    }
     return;
 }
 
@@ -262,7 +295,7 @@ void ItemUpdater::erase(std::string entryId)
             log<level::ERR>(("Error: Version " + entryId + \
                              " is currently running on the BMC." \
                              " Unable to remove.").c_str());
-             return;
+            return;
         }
 
         // Delete ReadOnly partitions if it's not active
@@ -305,6 +338,7 @@ void ItemUpdater::erase(std::string entryId)
     }
 
     this->activations.erase(entryId);
+    ItemUpdater::resetUbootEnvVars();
 }
 
 void ItemUpdater::deleteAll()
@@ -447,7 +481,7 @@ bool ItemUpdater::fieldModeEnabled(bool value)
 
 void ItemUpdater::restoreFieldModeStatus()
 {
-    std::ifstream input("/run/fw_env");
+    std::ifstream input("/dev/mtd/u-boot-env");
     std::string envVar;
     std::getline(input, envVar);
 
@@ -542,7 +576,7 @@ bool ItemUpdater::isLowestPriority(uint8_t value)
 {
     for (const auto& intf : activations)
     {
-        if(intf.second->redundancyPriority)
+        if (intf.second->redundancyPriority)
         {
             if (intf.second->redundancyPriority.get()->priority() < value)
             {
@@ -551,6 +585,32 @@ bool ItemUpdater::isLowestPriority(uint8_t value)
         }
     }
     return true;
+}
+
+void ItemUpdater::resetUbootEnvVars()
+{
+    decltype(activations.begin()->second->redundancyPriority.get()->priority())
+             lowestPriority = std::numeric_limits<uint8_t>::max();
+    decltype(activations.begin()->second->versionId) lowestPriorityVersion;
+    for (const auto& intf : activations)
+    {
+        if (!intf.second->redundancyPriority.get())
+        {
+            // Skip this version if the redundancyPriority is not initialized.
+            continue;
+        }
+
+        if (intf.second->redundancyPriority.get()->priority()
+            <= lowestPriority)
+        {
+            lowestPriority = intf.second->redundancyPriority.get()->priority();
+            lowestPriorityVersion = intf.second->versionId;
+        }
+    }
+
+    // Update the U-boot environment variable to point to the lowest priority
+    auto it = activations.find(lowestPriorityVersion);
+    it->second->updateUbootEnvVars();
 }
 
 } // namespace updater
